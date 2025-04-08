@@ -69,7 +69,7 @@ M, K, N = 32, 32, 32
 fp8_max = 448.0
 
 model = Mod(K, N, has_bias).eval()
-data = torch.ones(M, K).bfloat16()
+data = torch.randn(M, K).bfloat16()
 weight = model.linear.weight  # (N, K)
 
 print("my bf16 weight:", weight[0][0])
@@ -123,9 +123,7 @@ q_weight = (weight / scale).to(torch.float8_e4m3fn)
 # Step 4: dequantize
 w_dq = q_weight.float() * scale
 w_dq = w_dq.to(compute_dtype)
-print("my w_dq[0][0]:", w_dq[0][0])
-print("my w_dq[0]:", w_dq[0])
-print("my w_dq[0].sum:", w_dq[0].sum())
+
 # Step 6: forward pass
 if has_bias:
     bias = model.linear.bias
@@ -135,18 +133,9 @@ else:
 
 # TODO: add prepack
 
-output2 = torch.zeros(M, N).to(compute_dtype)
-output2 = output2.unsqueeze(0)
-
-q_weight = q_weight.unsqueeze(0)
-
-data = data.unsqueeze(0)
-
-sgl_kernel.cpu.fp8_scaled_mm(
-    output2, data, q_weight, is_vnni=False, scales2=scale
+output2 = sgl_kernel.cpu.fp8_scaled_mm(
+    data, q_weight, scale, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=False
 )
-
-output2 = output2.squeeze(0)
 
 print("my ref:")
 print(output1[0])
@@ -154,10 +143,4 @@ print(output1[0])
 print("my compute:")
 print(output2[0])
 
-data_for_bmm = data.unsqueeze(0)
-weight_for_bmm = w_dq.T.contiguous().unsqueeze(0)
-
 compare(output1, output2)
-
-# import flashinfer
-# assert output1 == output2
