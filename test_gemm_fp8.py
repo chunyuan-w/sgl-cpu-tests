@@ -63,8 +63,8 @@ block_size = 2
 
 scales_block_size = [block_size, block_size]
 
-# has_bias = True
-has_bias = False
+has_bias = True
+# has_bias = False
 M, K, N = 32, 32, 32
 fp8_max = 448.0
 
@@ -127,7 +127,7 @@ w_dq = w_dq.to(compute_dtype)
 # Step 6: forward pass
 if has_bias:
     bias = model.linear.bias
-    output1 = torch.matmul(data.to(compute_dtype), w_dq.T) + bias
+    output1 = torch.matmul(data.to(compute_dtype), w_dq.T) + bias.to(compute_dtype)
 else:
     output1 = torch.matmul(data.to(compute_dtype), w_dq.T)
 
