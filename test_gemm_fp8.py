@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 
+import sgl_kernel
+import sgl_kernel.cpu
+
 #   "quantization_config": {
 #     "activation_scheme": "dynamic",
 #     "fmt": "e4m3",
@@ -30,6 +33,8 @@ class Mod(nn.Module):
 
 
 block_size = 2
+
+scales_block_size = [block_size, block_size]
 
 has_bias = True
 M, K, N = 2, 16, 32
@@ -68,11 +73,13 @@ if has_bias:
 else:
     output1 = torch.matmul(data.to(compute_dtype), w_dq.T)
 
-# import sgl_kernel
 # TODO: add prepack
-# scales_squeeze = scales.view(N // block_size, K // block_size)
-# output2 = sgl_kernel.common_ops.fp8_scaled_mm(
-#     data, q_blocks, scales_squeeze, bias if has_bias else None, is_vnni=False
-# )
+# TODO: test case with tail
+scales_squeeze = scales.view(N // block_size, K // block_size)
+output2 = sgl_kernel.cpu.fp8_scaled_mm(
+    data, q_blocks, scales_squeeze, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=False
+)
+print(output1)
+print(output2)
 
 # assert output1 == output2
