@@ -4,6 +4,8 @@ import torch.nn as nn
 import sgl_kernel
 import sgl_kernel.cpu
 
+torch.manual_seed(0)
+
 #   "quantization_config": {
 #     "activation_scheme": "dynamic",
 #     "fmt": "e4m3",
@@ -38,12 +40,16 @@ scales_block_size = [block_size, block_size]
 
 # has_bias = True
 has_bias = False
-M, K, N = 32, 32, 16
+M, K, N = 32, 32, 32
 fp8_max = 448.0
 
 model = Mod(K, N, has_bias).eval()
-data = torch.rand(M, K).bfloat16() * 0.1
+data = torch.ones(M, K).bfloat16()
 weight = model.linear.weight  # (N, K)
+
+print("my bf16 weight:", weight[0][0])
+print("w[0].sum", weight[0].sum())
+print("w shape", weight.shape)
 
 # Prepare compute dtype
 compute_dtype = torch.bfloat16
@@ -82,6 +88,8 @@ if False:
 # Step 2: compute per-block max abs values → scale
 abs_max = weight.abs().max()
 scale = abs_max / fp8_max
+print("my scale: ", scale)
+
 assert scale != 0
 
 # Step 3: quantize → FP8
@@ -90,7 +98,9 @@ q_weight = (weight / scale).to(torch.float8_e4m3fn)
 # Step 4: dequantize
 w_dq = q_weight.float() * scale
 w_dq = w_dq.to(compute_dtype)
-
+print("my w_dq[0][0]:", w_dq[0][0])
+print("my w_dq[0]:", w_dq[0])
+print("my w_dq[0].sum:", w_dq[0].sum())
 # Step 6: forward pass
 if has_bias:
     bias = model.linear.bias
@@ -100,13 +110,27 @@ else:
 
 # TODO: add prepack
 
-output2 = sgl_kernel.cpu.fp8_scaled_mm(
-    data, q_weight, scale, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=False
+output2 = torch.zeros(M, N).to(compute_dtype)
+output2 = output2.unsqueeze(0)
+
+q_weight = q_weight.unsqueeze(0)
+
+data = data.unsqueeze(0)
+
+sgl_kernel.cpu.fp8_scaled_mm(
+    output2, data, q_weight, is_vnni=False, scales2=scale
 )
+
+output2 = output2.squeeze(0)
+
 print("my ref:")
-print(output1)
+print(output1[0])
 
 print("my compute:")
-print(output2)
+print(output2[0])
 
+data_for_bmm = data.unsqueeze(0)
+weight_for_bmm = w_dq.T.contiguous().unsqueeze(0)
+
+import flashinfer
 # assert output1 == output2
