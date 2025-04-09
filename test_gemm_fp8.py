@@ -59,18 +59,23 @@ class Mod(nn.Module):
 # Optimized: sgl-kernel
 
 
-block_size = 2
+block_size = 128
 
 scales_block_size = [block_size, block_size]
 
 has_bias = True
 # has_bias = False
-M, K, N = 32, 32, 32
+M, K, N = 32, 512, 512
 fp8_max = 448.0
 
 model = Mod(K, N, has_bias).eval()
-data = torch.randn(M, K).bfloat16()
+data = torch.rand(M, K).bfloat16()
+
+print("data:", data)
 weight = model.linear.weight  # (N, K)
+
+if has_bias:
+    bias = model.linear.bias
 
 print("my bf16 weight:", weight[0][0])
 print("w[0].sum", weight[0].sum())
@@ -106,6 +111,7 @@ if True:
     # TODO: test case with tail
     scales_squeeze = scales.view(N // block_size, K // block_size)
 
+    print("scales_squeeze:", scales_squeeze)
     output2 = sgl_kernel.cpu.fp8_scaled_mm(
         data, q_blocks_reshape, scales_squeeze, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=False
     )
@@ -132,11 +138,9 @@ else:
 
 # Step 6: forward pass
 if has_bias:
-    bias = model.linear.bias
     output1 = torch.matmul(data.to(compute_dtype), w_dq.T) + bias.to(compute_dtype)
 else:
     output1 = torch.matmul(data.to(compute_dtype), w_dq.T)
-
 
 print("my ref:")
 print(output1[0])
