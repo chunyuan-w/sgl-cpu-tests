@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 
@@ -62,9 +64,13 @@ class Mod(nn.Module):
 block_size = 128
 
 scales_block_size = [block_size, block_size]
+block_N = scales_block_size[0]
+block_K = scales_block_size[1]
+
 
 has_bias = True
 # has_bias = False
+# M, K, N = 32, 480, 480
 M, K, N = 32, 512, 512
 fp8_max = 448.0
 
@@ -85,7 +91,14 @@ print("w shape", weight.shape)
 compute_dtype = torch.bfloat16
 
 # Step 1: reshape to 8x8 grid of (128x128) blocks
-weight_blocks = weight.view(N // block_size, block_size, K // block_size, block_size)
+
+pad_N = (block_N - (N % block_N)) % block_N
+pad_K = (block_K - (K % block_K)) % block_K
+
+if pad_N > 0 or pad_K > 0:
+    weight = torch.nn.functional.pad(weight, (0, pad_N, 0, pad_K))
+
+weight_blocks = weight.view(math.ceil(N / block_size), block_size, math.ceil(K / block_size), block_size)
 weight_blocks = weight_blocks.permute(0, 2, 1, 3).contiguous()  # shape: (8, 8, 128, 128)
 
 # TODO: add prepack
@@ -99,17 +112,27 @@ if True:
     # Step 3: quantize → FP8
     q_blocks = (weight_blocks / scales).to(torch.float8_e4m3fn)
     q_blocks_reshape = q_blocks.permute(0, 2, 1, 3).contiguous()
-    q_blocks_reshape = q_blocks_reshape.view(N, K)
+    
+    if pad_N > 0 or pad_K > 0:
+        q_blocks_reshape = q_blocks_reshape.view(N + pad_N, K + pad_K)
+        q_blocks_reshape = q_blocks_reshape[:N, :K].contiguous()
+    else:
+        q_blocks_reshape = q_blocks_reshape.view(N, K)
 
     # Step 4: dequantize
     dq_blocks = q_blocks.float() * scales  # back to float32
 
     # Step 5: reshape back to (N, K)
     dq_blocks = dq_blocks.permute(0, 2, 1, 3).contiguous()  # (8, 128, 8, 128)
-    w_dq = dq_blocks.view(N, K).to(compute_dtype)
+    
+    if pad_N > 0 or pad_K > 0:
+        w_dq = dq_blocks.view(N + pad_N, K + pad_K).to(compute_dtype)
+        w_dq = w_dq[:N, :K].contiguous()
+    else:
+        w_dq = dq_blocks.view(N, K).to(compute_dtype)
 
     # TODO: test case with tail
-    scales_squeeze = scales.view(N // block_size, K // block_size)
+    scales_squeeze = scales.view(math.ceil(N / block_size), math.ceil(K / block_size))
 
     print("scales_squeeze:", scales_squeeze)
     output2 = sgl_kernel.cpu.fp8_scaled_mm(
