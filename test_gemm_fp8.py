@@ -70,8 +70,8 @@ block_K = scales_block_size[1]
 
 has_bias = True
 # has_bias = False
-# M, K, N = 32, 480, 480
-M, K, N = 32, 512, 512
+M, K, N = 32, 480, 480
+# M, K, N = 32, 512, 512
 fp8_max = 448.0
 
 model = Mod(K, N, has_bias).eval()
@@ -135,8 +135,10 @@ if True:
     scales_squeeze = scales.view(math.ceil(N / block_size), math.ceil(K / block_size))
 
     print("scales_squeeze:", scales_squeeze)
+    
+    packed_q_blocks_reshape = sgl_kernel.cpu.convert_weight_packed(q_blocks_reshape)
     output2 = sgl_kernel.cpu.fp8_scaled_mm(
-        data, q_blocks_reshape, scales_squeeze, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=False
+        data, packed_q_blocks_reshape, scales_squeeze, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=True
     )
 else:
     # Per tensor
