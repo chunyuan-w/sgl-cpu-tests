@@ -83,7 +83,9 @@ compute_dtype = torch.bfloat16
 weight_blocks = weight.view(N // block_size, block_size, K // block_size, block_size)
 weight_blocks = weight_blocks.permute(0, 2, 1, 3).contiguous()  # shape: (8, 8, 128, 128)
 
-if False:
+# TODO: add prepack
+
+if True:
     # Step 2: compute per-block max abs values → scale
     abs_max = weight_blocks.abs().amax(dim=(-2, -1), keepdim=True)  # (8, 8, 1, 1)
     scales = abs_max / fp8_max
@@ -107,22 +109,26 @@ if False:
     output2 = sgl_kernel.cpu.fp8_scaled_mm(
         data, q_blocks_reshape, scales_squeeze, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=False
     )
+else:
+    # Per tensor
 
-# Per tensor
+    # Step 2: compute per-block max abs values → scale
+    abs_max = weight.abs().max()
+    scale = abs_max / fp8_max
+    print("my scale: ", scale)
 
-# Step 2: compute per-block max abs values → scale
-abs_max = weight.abs().max()
-scale = abs_max / fp8_max
-print("my scale: ", scale)
+    assert scale != 0
 
-assert scale != 0
+    # Step 3: quantize → FP8
+    q_weight = (weight / scale).to(torch.float8_e4m3fn)
 
-# Step 3: quantize → FP8
-q_weight = (weight / scale).to(torch.float8_e4m3fn)
-
-# Step 4: dequantize
-w_dq = q_weight.float() * scale
-w_dq = w_dq.to(compute_dtype)
+    # Step 4: dequantize
+    w_dq = q_weight.float() * scale
+    w_dq = w_dq.to(compute_dtype)
+    
+    output2 = sgl_kernel.cpu.fp8_scaled_mm(
+        data, q_weight, scale, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=False
+    )
 
 # Step 6: forward pass
 if has_bias:
@@ -131,11 +137,6 @@ if has_bias:
 else:
     output1 = torch.matmul(data.to(compute_dtype), w_dq.T)
 
-# TODO: add prepack
-
-output2 = sgl_kernel.cpu.fp8_scaled_mm(
-    data, q_weight, scale, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=False
-)
 
 print("my ref:")
 print(output1[0])
