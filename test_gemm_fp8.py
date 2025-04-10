@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 import sgl_kernel
-import sgl_kernel.cpu
+from sgl_kernel.common_ops import convert_weight_packed, fp8_scaled_mm_cpu
 
 pres = {
     torch.bfloat16 : 1e-2,
@@ -70,12 +70,13 @@ block_K = scales_block_size[1]
 
 has_bias = True
 # has_bias = False
+# M, K, N = 1, 1024, 1024
+# M, K, N = 1, 256, 256
 M, K, N = 32, 480, 480
-# M, K, N = 32, 512, 512
 fp8_max = 448.0
 
 model = Mod(K, N, has_bias).eval()
-data = torch.rand(M, K).bfloat16()
+data = torch.randn(M, K).bfloat16()
 
 print("data:", data)
 weight = model.linear.weight  # (N, K)
@@ -136,9 +137,9 @@ if True:
 
     print("scales_squeeze:", scales_squeeze)
     
-    packed_q_blocks_reshape = sgl_kernel.cpu.convert_weight_packed(q_blocks_reshape)
-    output2 = sgl_kernel.cpu.fp8_scaled_mm(
-        data, packed_q_blocks_reshape, scales_squeeze, scales_block_size, bias if has_bias else None, data.dtype, is_vnni=True
+    packed_q_blocks_reshape = convert_weight_packed(q_blocks_reshape)
+    output2 = fp8_scaled_mm_cpu(
+        data, packed_q_blocks_reshape, scales_squeeze, scales_block_size, bias if has_bias else None, data.dtype, True
     )
 else:
     # Per tensor
