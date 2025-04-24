@@ -64,28 +64,57 @@ def _run_sdpa_forward_decode(
     return output
 
 def _test_grouped_decode_attention_once(B, H_Q, H_KV, D, D_V, seq_len):
+    B = 1
+    H_Q = 22
+    D = 576
+    H_KV = 1
+    D_V = 512
+    
+    max_tokens = 1728503
+    max_num_seqs = 4097
+    max_seq_lens = 163844
+    
     dtype = torch.bfloat16
 
-    total_tokens = B * seq_len
+    total_tokens = max_num_seqs * max_seq_lens
     sm_scale = 1.0 / (D**0.5)
+    print(f"{sm_scale=}")
     logit_cap = 0.0
     num_kv_splits = 8
     enable_gqa = H_Q != H_KV
 
-    # q represents the new token being generated, one per batch
-    q = torch.randn(B, H_Q, D, dtype=dtype)
+    # # q represents the new token being generated, one per batch
+    # q = torch.randn(B, H_Q, D, dtype=dtype)
 
-    # k_buffer and v_buffer represent all previous tokens
-    k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype)
-    v_buffer = k_buffer.narrow(2, 0, D_V)
+    # # k_buffer and v_buffer represent all previous tokens
+    # k_buffer = torch.empty(max_tokens, H_KV, D, dtype=dtype)
+    # v_buffer = k_buffer.narrow(2, 0, D_V)
 
-    key = torch.randn(B, H_KV, D, dtype=dtype)
-    value = key.narrow(2, 0, D_V)
-    # make sure no duplicates in loc
-    loc = torch.randperm(total_tokens)[:B].to(torch.int32)
+    # key = torch.randn(B, H_KV, D, dtype=dtype)
+    # value = key.narrow(2, 0, D_V)
+    # # make sure no duplicates in loc
+    # # loc = torch.randperm(total_tokens)[:B].to(torch.int32)
+    # loc = torch.tensor([8], dtype=torch.int32)
 
-    k_buffer2 = k_buffer.clone()
-    v_buffer2 = k_buffer2.narrow(2, 0, D_V)
+
+    # saved_data = torch.load("/home/chunyuan/sglang-dev/debug-inputs/debug_inputs_20250424_174334.pt", weights_only=False)
+    saved_data = torch.load("/home/chunyuan/sglang-dev/debug-inputs/debug_inputs_20250424_184112_1.pt", weights_only=False)
+    q = saved_data["q"]
+    k_buffer2 = saved_data["k"]
+    v_buffer2 = saved_data["v"]
+    o = saved_data["o"]
+    key = saved_data["k_raw"]
+    value = saved_data["v_raw"]
+    loc = saved_data["out_cache_loc"]
+    req_to_token = saved_data["req_to_token"]
+    b_req_idx = saved_data["req_pool_indices"]
+    b_seq_len = saved_data["seq_lens"]
+    attn_logits = saved_data["attn_logits"]
+    # sm_scale = 
+
+
+    # k_buffer = k_buffer2.clone()
+    # v_buffer = k_buffer.narrow(2, 0, D_V)
 
     # trick for debugging flash attn
     #for i in range(total_tokens):
@@ -93,90 +122,101 @@ def _test_grouped_decode_attention_once(B, H_Q, H_KV, D, D_V, seq_len):
     #    v_buffer2[i].fill_(i)
 
 
-    # o will have the same shape as q
-    o = torch.zeros(B, H_Q, D_V, dtype=dtype)
-    o_grouped = torch.zeros(B, H_Q, D_V, dtype=dtype)
+    # # o will have the same shape as q
+    # o = torch.zeros(B, H_Q, D_V, dtype=dtype)
+    # o_grouped = torch.zeros(B, H_Q, D_V, dtype=dtype)
 
-    req_to_token = torch.arange(total_tokens).reshape(B, seq_len).to(torch.int32)
-    b_req_idx = torch.arange(B).to(torch.int64)
-    b_seq_len = torch.full((B,), seq_len).to(torch.int64)
+    # req_to_token = torch.arange(total_tokens).reshape(max_num_seqs, max_seq_lens).to(torch.int32)
+    # # b_req_idx = torch.arange(B).to(torch.int64)
+    # b_req_idx = torch.tensor([0])
+    # # b_seq_len = torch.full((B,), seq_len).to(torch.int64)
+    # b_seq_len = torch.tensor([8])
 
-    attn_logits = torch.empty(
-        (B, H_Q, num_kv_splits, D_V + 1),
-        dtype=torch.float32,
-    )
+    # attn_logits = torch.empty(
+    #     (B, H_Q, num_kv_splits, D_V + 1),
+    #     dtype=torch.float32,
+    # )
 
-    niter = 1000
+    niter = 100
+    # niter = 1000
 
-    for _ in range(niter):
-        decode_attention(
-            q,
-            k_buffer2,
-            v_buffer2,
-            o,
-            key,
-            value,
-            loc,
-            attn_logits,
-            req_to_token,
-            b_req_idx,
-            b_seq_len,
-            sm_scale,
-            logit_cap)
+    # for _ in range(niter):
+    #     decode_attention(
+    #         q,
+    #         k_buffer2,
+    #         v_buffer2,
+    #         o,
+    #         key,
+    #         value,
+    #         loc,
+    #         attn_logits,
+    #         req_to_token,
+    #         b_req_idx,
+    #         b_seq_len,
+    #         sm_scale,
+    #         logit_cap)
  
-    t1 = time()
-    for _ in range(niter):
-        decode_attention(
-            q,
-            k_buffer2,
-            v_buffer2,
-            o,
-            key,
-            value,
-            loc,
-            attn_logits,
-            req_to_token,
-            b_req_idx,
-            b_seq_len,
-            sm_scale,
-            logit_cap)
-    t2 = time()
+    # t1 = time()
+    # for _ in range(niter):
+    
+    
+    print("v_buffer2=================")
+    print(v_buffer2.size())
+    print(v_buffer2.stride())
+    decode_attention(
+        q.view(-1, 22, 576),
+        k_buffer2,
+        v_buffer2,
+        o.view(-1, 22, 512),
+        key,
+        value,
+        loc,
+        attn_logits,
+        req_to_token,
+        b_req_idx,
+        b_seq_len,
+        sm_scale,
+        logit_cap)
+    
+    assert not torch.isnan(o).any(), "nan in o"
+    
+    # t2 = time()
 
-    t3 = time()
-    for _ in range(int(niter/100)):
-        _run_sdpa_forward_decode(
-            q,
-            o_grouped,
-            k_buffer,
-            v_buffer,
-            key,
-            loc,
-            req_to_token,
-            b_req_idx,
-            b_seq_len,
-            scaling=sm_scale,
-            enable_gqa=enable_gqa
-        )
-    t4 = time()
-    tt1 = (t2 - t1) * 1000 * 1000 / niter
-    tt2 = (t4 - t3) * 1000 * 1000 / (niter / 100)
-    print("opt takes {:.4f} us".format(tt1))
-    print("ref takes {:.4f} us".format(tt2))
+    # t3 = time()
+    # for _ in range(int(niter/100)):
+    # _run_sdpa_forward_decode(
+    #     q,
+    #     o_grouped,
+    #     k_buffer,
+    #     v_buffer,
+    #     key,
+    #     loc,
+    #     req_to_token,
+    #     b_req_idx,
+    #     b_seq_len,
+    #     scaling=sm_scale,
+    #     enable_gqa=enable_gqa
+    # )
+    # t4 = time()
+    # tt1 = (t2 - t1) * 1000 * 1000 / niter
+    # tt2 = (t4 - t3) * 1000 * 1000 / (niter / 100)
+    # print("opt takes {:.4f} us".format(tt1))
+    # print("ref takes {:.4f} us".format(tt2))
 
-    cos_sim = torch.nn.functional.cosine_similarity(
-        o.flatten(), o_grouped.flatten(), dim=0
-    )
-    print("cos_sim = ", cos_sim.item(), " > 0.99: ",  cos_sim.item() > 0.99)
-    print("allclose: ", torch.allclose(o, o_grouped, atol=3e-2))
-    print("comparing k_buffer: ", torch.equal(k_buffer, k_buffer2), "; diff sum: ", (k_buffer - k_buffer2).abs().sum().item())
-    print("comparing v_buffer: ", torch.equal(v_buffer, v_buffer2), "; diff sum: ", (v_buffer - v_buffer2).abs().sum().item(), "\n")
+    # cos_sim = torch.nn.functional.cosine_similarity(
+    #     o.flatten(), o_grouped.flatten(), dim=0
+    # )
+    # print("cos_sim = ", cos_sim.item(), " > 0.99: ",  cos_sim.item() > 0.99)
+    # print("allclose: ", torch.allclose(o, o_grouped, atol=3e-2))
+    # print("comparing k_buffer: ", torch.equal(k_buffer, k_buffer2), "; diff sum: ", (k_buffer - k_buffer2).abs().sum().item())
+    # print("comparing v_buffer: ", torch.equal(v_buffer, v_buffer2), "; diff sum: ", (v_buffer - v_buffer2).abs().sum().item(), "\n")
     
 
 def test_grouped_decode_attention():
     configs = [
         (1, 22, 1, 576, 512, 8*111),
-        (4, 22, 1, 576, 512, 8*128),
-        (40, 22, 1, 576, 512, 8*133),
+        # (4, 22, 1, 576, 512, 8*128),
+        # (40, 22, 1, 576, 512, 8*133),
     ]
 
     for B, H_Q, H_KV, D, D_V, seqlen in configs:
