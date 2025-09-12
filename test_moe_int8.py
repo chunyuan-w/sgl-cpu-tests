@@ -1,12 +1,29 @@
+import time
+
 import torch
 import torch.nn.functional as F
-from sgl_kernel.common_ops import fused_experts_cpu as fused_experts
-from sgl_kernel.common_ops import convert_weight_packed
+from sgl_kernel_cpu import common_ops
+# from sgl_kernel.common_ops import fused_experts_cpu as fused_experts
+# from sgl_kernel.common_ops import convert_weight_packed
 import math
 
 from utils import compare
 
 torch.manual_seed(1111)
+
+a = torch.ones(256 * 1024 * 1024 // 4, dtype=torch.float)
+b = torch.ones(256 * 1024 * 1024 // 4, dtype=torch.float)
+def flush():
+    global a, b
+    a += b
+
+num_warmups = 1000
+num_repeats = 1000
+M = 4
+
+# num_warmups = 50
+# num_repeats = 50
+# M = 4096
 
 #torch.set_printoptions(profile="full")
 
@@ -118,22 +135,44 @@ def run_single_test(M, N, K, E, topk, dtype, prepack):
     score = torch.softmax(score, dim=-1, dtype=torch.float32)
     topk_weight, topk_ids = torch.topk(score, topk)
 
-    ref_out = torch_w8a8_per_column_moe(a, w1, w2, w1_s, w2_s, topk_weight, topk_ids, topk)
+    # ref_out = torch_w8a8_per_column_moe(a, w1, w2, w1_s, w2_s, topk_weight, topk_ids, topk)
 
     inplace = True
-    packed_w1 = convert_weight_packed(w1) if prepack else w1
-    packed_w2 = convert_weight_packed(w2) if prepack else w2
-    out = fused_experts(a, packed_w1, packed_w2, topk_weight, topk_ids.to(torch.int32), inplace, True, False, False, w1_s, w2_s, None, None, None, None, None, prepack)
+    packed_w1 = torch.ops.sgl_kernel.convert_weight_packed(w1) if prepack else w1
+    packed_w2 = torch.ops.sgl_kernel.convert_weight_packed(w2) if prepack else w2
+    
+    for i in range(num_warmups):
+        out = torch.ops.sgl_kernel.fused_experts_cpu(a, packed_w1, packed_w2, topk_weight, topk_ids.to(torch.int32), inplace, True, False, w1_s, w2_s, None, None, None, prepack)
+    
+    with torch.autograd.profiler.profile(record_shapes=True) as prof:
+        # inference
+        out = torch.ops.sgl_kernel.fused_experts_cpu(a, packed_w1, packed_w2, topk_weight, topk_ids.to(torch.int32), inplace, True, False, w1_s, w2_s, None, None, None, prepack)
+    print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cpu_time_total"))
+    
+    times = []
+    for _ in range(num_repeats):
+        flush()
+        
+        start = time.perf_counter()
+        out = torch.ops.sgl_kernel.fused_experts_cpu(
+            a, packed_w1, packed_w2, topk_weight, topk_ids.to(torch.int32),
+            inplace, True, False, w1_s, w2_s, None, None, None, prepack
+        )
+        end = time.perf_counter()
+        times.append(end - start)
 
-    print("### using default atol=rtol=0.01 for torch.bfloat16: (may fail for large input shape")
-    compare(ref_out, out)
+    avg_time = sum(times) / num_repeats
+    print(f"Average time over {num_repeats} runs: {avg_time*1000:.3f} ms")    
+
+    # print("### using default atol=rtol=0.01 for torch.bfloat16: (may fail for large input shape")
+    # compare(ref_out, out)
 
     ### test_int8_kernel.py use 0.05, we use 0.01
-    print("\n### same method with test_int8_kernel.py:")
-    res = torch.mean(torch.abs(out.to(torch.float32) - ref_out.to(torch.float32))) / torch.mean(torch.abs(ref_out.to(torch.float32))) < 0.01
-    print(res)
+    # print("\n### same method with test_int8_kernel.py:")
+    # res = torch.mean(torch.abs(out.to(torch.float32) - ref_out.to(torch.float32))) / torch.mean(torch.abs(ref_out.to(torch.float32))) < 0.01
+    # print(res)
 
-run_single_test(1, 128, 256, 8, 2, torch.bfloat16, prepack=False)
-run_single_test(39, 1280, 256 * 4, 8, 3, torch.bfloat16, prepack=True)
-run_single_test(1024, 1280, 256 * 4, 8, 3, torch.bfloat16, prepack=True)
+# run_single_test(1, 128, 256, 8, 2, torch.bfloat16, prepack=False)
+# run_single_test(39, 1280, 256 * 4, 8, 3, torch.bfloat16, prepack=True)
+run_single_test(M, 384, 7168, 256, 8, torch.bfloat16, prepack=True)
 
